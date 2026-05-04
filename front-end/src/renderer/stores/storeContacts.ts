@@ -31,7 +31,7 @@ const useContactsStore = defineStore('contacts', () => {
           nickname: c.nickname,
         });
       });
-    });
+    }); 
 
     return publicKeys;
   });
