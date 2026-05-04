@@ -23,7 +23,7 @@ env:
 jobs:
   release:
     name: Release
-    runs-on: transaction-tools-linux-medium
+    runs-on: ubuntu-latest 
     outputs:
       create_pr: ${{ env.CREATE_PR }}
       next_version_snapshot: ${{ env.NEXT_VERSION_SNAPSHOT }}
