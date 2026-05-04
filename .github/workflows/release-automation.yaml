@@ -38,7 +38,7 @@ jobs:
 
       - name: Parse Version
         id: version_parser
-        uses: madhead/semver-utils
+        uses: madhead/semver-utils@v4.3.0
         with:
           lenient: false
           version: ${{ github.event.inputs.version }}
