@@ -38,7 +38,7 @@ jobs:
 
       - name: Parse Version
         id: version_parser
-        uses: step-security/semver-utils@4ae9c1fd6d1c5f8f152fe7e2efe8069a952c2ace # v4.3.2
+        uses: madhead/semver-utils
         with:
           lenient: false
           version: ${{ github.event.inputs.version }}
@@ -172,7 +172,7 @@ jobs:
 
   create_pr:
     name: Create Snapshot Bump PR
-    runs-on: transaction-tools-linux-medium
+    runs-on: ubuntu-latest 
     needs: release
     if: ${{ needs.release.outputs.create_pr == 'true' }}
     env:
