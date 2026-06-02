@@ -222,8 +222,8 @@ jobs:
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
-          username: hedera-bot
-          password: ${{ secrets.HEDERA_BOT_TOKEN }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Set up Docker Buildx
         # Required so build-push-action gets a docker-container (buildkit) builder;
