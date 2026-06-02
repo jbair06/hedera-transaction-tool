@@ -291,7 +291,17 @@ jobs:
       - name: Close the Milestone
         if: ${{ needs.prepare.outputs.prerelease == '' }}
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          MILESTONE_NAME="v${{ needs.prepare.outputs.release }}"
+          MILESTONE_NUMBER=$(gh api repos/${{ github.repository }}/milestones \
+            --jq ".[] | select(.title == \"$MILESTONE_NAME\") | .number")
+          if [ -n "$MILESTONE_NUMBER" ]; then
+            gh api repos/${{ github.repository }}/milestones/$MILESTONE_NUMBER \
+              -X PATCH -f state=closed
+          else
+            echo "Milestone $MILESTONE_NAME not found, skipping."
+          fi
 
       - name: Set Release Body
         if: ${{ needs.prepare.outputs.prerelease == '' }}
