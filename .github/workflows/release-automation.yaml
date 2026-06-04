@@ -38,7 +38,7 @@ jobs:
   # ----------------------------
   prepare:
     name: Prepare Release Metadata
-    runs-on: transaction-tools-linux-medium
+    runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.meta.outputs.version }}
       release_tag: ${{ steps.meta.outputs.release_tag }}
@@ -48,14 +48,9 @@ jobs:
       prerelease: ${{ steps.version_parser.outputs.prerelease }}
 
     steps:
-      - name: Harden Runner
-        uses: step-security/harden-runner@a5ad31d6a139d249332a2605b85202e8c0b78450 # v2.19.1
-        with:
-          egress-policy: audit
-
       - name: Parse Version
         id: version_parser
-        uses: step-security/semver-utils@4ae9c1fd6d1c5f8f152fe7e2efe8069a952c2ace # v4.3.2
+        uses: madhead/semver-utils@latest
         with:
           lenient: false
           version: ${{ github.event.inputs.version }}
@@ -87,7 +82,7 @@ jobs:
   # ----------------------------
   cut_release:
     name: Branch, Bump and Tag
-    runs-on: transaction-tools-linux-medium
+    runs-on: ubuntu-latest
     needs: prepare
     if: ${{ inputs.mode == 'full_release' }}
     env:
@@ -100,13 +95,8 @@ jobs:
       pr_title: ${{ steps.branch_or_create_release.outputs.pr_title }}
 
     steps:
-      - name: Harden Runner
-        uses: step-security/harden-runner@a5ad31d6a139d249332a2605b85202e8c0b78450 # v2.19.1
-        with:
-          egress-policy: audit
-
       - name: Checkout Repository
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        uses: actions/checkout@v4
         with:
           fetch-depth: 0
           ref: main
@@ -114,7 +104,7 @@ jobs:
 
       - name: Import GPG Key
         id: gpg_importer
-        uses: step-security/ghaction-import-gpg@c0b4a334b9b72bfaaebec86ef022a78a5b17f828 # v7.0.0
+        uses: crazy-max/ghaction-import-gpg@v6
         with:
           git_commit_gpgsign: true
           git_committer_email: ${{ vars.GIT_USER_EMAIL }}
@@ -125,12 +115,12 @@ jobs:
           passphrase: ${{ secrets.GPG_PASSPHRASE }}
 
       - name: Install pnpm
-        uses: step-security/action-setup@0ad50dc56a23060fa78b14cfcf0677c4e14b42bc # v5.0.0
+        uses: pnpm/action-setup@v4
         with:
           version: 9.15.3
 
       - name: Set up Node.js
-        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        uses: actions/setup-node@v4
         with:
           node-version: 24.15.0
 
@@ -178,7 +168,7 @@ jobs:
 
       - name: Commit and Tag
         if: ${{ env.TAG_EXISTS == 'false' }}
-        uses: step-security/git-auto-commit-action@749bc1cc775376092cc4227ba537137f445ca7c3 # v7.1.1
+        uses: stefanzweifel/git-auto-commit-action@v5
         with:
           commit_author: ${{ steps.gpg_importer.outputs.name }} <${{ steps.gpg_importer.outputs.email }}>
           commit_message: Bump versions for ${{ env.RELEASE_TAG }}
@@ -195,7 +185,7 @@ jobs:
   # ----------------------------
   build_and_push_images:
     name: Build and Push Docker Images
-    runs-on: transaction-tools-linux-medium
+    runs-on: ubuntu-latest
     timeout-minutes: 30
     needs: [prepare, cut_release]
     if:  >-
@@ -225,17 +215,12 @@ jobs:
           - image: migration
             dockerfile: back-end/typeorm/Dockerfile
     env:
-      REGISTRY: ghcr.io/hashgraph/hedera-transaction-tool
+      REGISTRY: ghcr.io/jbair06/hedera-transaction-tool
       VERSION: ${{ needs.prepare.outputs.version }}
 
     steps:
-      - name: Harden Runner
-        uses: step-security/harden-runner@a5ad31d6a139d249332a2605b85202e8c0b78450 # v2.19.1
-        with:
-          egress-policy: audit
-
       - name: Checkout Repository
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        uses: actions/checkout@v4
         with:
           # Always build from the immutable release tag for the supplied version
           # so the image is pinned to the exact tagged commit (the api embeds
@@ -246,7 +231,7 @@ jobs:
           token: ${{ secrets.HEDERA_BOT_TOKEN }}
 
       - name: Log in to GHCR
-        uses: docker/login-action@4907a6ddec9925e35a0a9e82d7399ccc52663121 # 4.1.0
+        uses: docker/login-action@v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -255,18 +240,18 @@ jobs:
       - name: Set up Docker Buildx
         # Required so build-push-action gets a docker-container (buildkit) builder;
         # the default docker driver cannot export the gha cache.
-        uses: docker/setup-buildx-action@c47758b77c9736f4b2ef4073d4d51994fabfe349 # v3.7.1
+        uses: docker/setup-buildx-action@v3
 
       - name: Extract metadata (tags, labels)
         id: meta
-        uses: docker/metadata-action@030e881283bb7a6894de51c315a6bfe6a94e05cf # 6.0.0
+        uses: docker/metadata-action@v5
         with:
           images: ${{ env.REGISTRY }}/${{ matrix.image }}
           tags: type=raw,value=${{ env.VERSION }}
 
       - name: Build and Push Docker Image
         id: push
-        uses: docker/build-push-action@bcafcacb16a39f128d818304e6c9c0c18556b85f # 7.1.0
+        uses: docker/build-push-action@v6
         with:
           context: back-end
           file: ${{ matrix.dockerfile }}
@@ -283,7 +268,7 @@ jobs:
           provenance: false
 
       - name: Generate artifact attestation
-        uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32 # v4.1.0
+        uses: actions/attest-build-provenance@v2
         with:
           subject-name: ${{ env.REGISTRY }}/${{ matrix.image }}
           subject-digest: ${{ steps.push.outputs.digest }}
@@ -320,13 +305,8 @@ jobs:
       VERSION: ${{ needs.prepare.outputs.version }}
 
     steps:
-      - name: Harden Runner
-        uses: step-security/harden-runner@a5ad31d6a139d249332a2605b85202e8c0b78450 # v2.19.1
-        with:
-          egress-policy: audit
-
       - name: Checkout Repository
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        uses: actions/checkout@v4
         with:
           # Build from the immutable release tag for the supplied version so the
           # version electron-builder bundles matches the tagged commit (same
@@ -335,12 +315,12 @@ jobs:
           token: ${{ secrets.HEDERA_BOT_TOKEN }}
 
       - name: Install pnpm
-        uses: step-security/action-setup@0ad50dc56a23060fa78b14cfcf0677c4e14b42bc # v5.0.0
+        uses: pnpm/action-setup@v4
         with:
           version: 9.15.3
 
       - name: Set up Node.js
-        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        uses: actions/setup-node@v4
         with:
           node-version: 24.15.0
           cache: 'pnpm'
@@ -386,7 +366,7 @@ jobs:
         run: pnpm run notarize:mac
 
       - name: Upload macOS Artifacts
-        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        uses: actions/upload-artifact@v4
         with:
           name: macos-artifacts-${{ env.VERSION }}
           path: |
@@ -404,7 +384,7 @@ jobs:
   # ----------------------------
   github_release:
     name: Publish GitHub Release
-    runs-on: transaction-tools-linux-medium
+    runs-on: ubuntu-latest
     needs: [prepare, cut_release, build_and_push_images, build_mac]
     if: ${{ inputs.mode == 'full_release' }}
     env:
@@ -412,30 +392,32 @@ jobs:
       RELEASE_TAG: ${{ needs.prepare.outputs.release_tag }}
 
     steps:
-      - name: Harden Runner
-        uses: step-security/harden-runner@a5ad31d6a139d249332a2605b85202e8c0b78450 # v2.19.1
-        with:
-          egress-policy: audit
-
       - name: Checkout Repository
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        uses: actions/checkout@v4
         with:
           fetch-depth: 0
           ref: ${{ needs.prepare.outputs.release_branch }}
           token: ${{ secrets.HEDERA_BOT_TOKEN }}
 
       - name: Set up Node.js
-        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        uses: actions/setup-node@v4
         with:
           node-version: 24.15.0
 
       - name: Close the Milestone
         if: ${{ needs.prepare.outputs.prerelease == '' }}
-        uses: step-security/close-milestone@b097272a7aaa0f5c40dc6bc671d45d35c5e85b51 # v2.2.1
-        with:
-          milestone_name: v${{ needs.prepare.outputs.release }}
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          MILESTONE_NAME="v${{ needs.prepare.outputs.release }}"
+          MILESTONE_NUMBER=$(gh api repos/${{ github.repository }}/milestones \
+            --jq ".[] | select(.title == \"$MILESTONE_NAME\") | .number")
+          if [ -n "$MILESTONE_NUMBER" ]; then
+            gh api repos/${{ github.repository }}/milestones/$MILESTONE_NUMBER \
+              -X PATCH -f state=closed
+          else
+            echo "Milestone $MILESTONE_NAME not found, skipping."
+          fi
 
       - name: Set Release Body
         if: ${{ needs.prepare.outputs.prerelease == '' }}
@@ -456,7 +438,7 @@ jobs:
           echo "EOF" >> $GITHUB_ENV
 
       - name: Create GitHub Release
-        uses: step-security/release-action@a0d8e0f90f554c15366ca2c9046bf4090d24adbe # v1.21.0
+        uses: ncipollo/release-action@v1
         with:
           body: ${{ env.RELEASE_BODY }}
           commit: ${{ env.RELEASE_BRANCH }}
@@ -469,7 +451,7 @@ jobs:
 
   create_snapshot_pr:
     name: Create Snapshot Bump PR
-    runs-on: transaction-tools-linux-medium
+    runs-on: ubuntu-latest
     needs: [prepare, cut_release, github_release]
     if: ${{ inputs.mode == 'full_release' && needs.cut_release.outputs.create_pr == 'true' }}
     env:
@@ -477,20 +459,15 @@ jobs:
       RELEASE_BRANCH: ${{ needs.prepare.outputs.release_branch }}
 
     steps:
-      - name: Harden Runner
-        uses: step-security/harden-runner@a5ad31d6a139d249332a2605b85202e8c0b78450 # v2.19.1
-        with:
-          egress-policy: audit
-
       - name: Checkout Repository
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        uses: actions/checkout@v4
         with:
           ref: main
           token: ${{ secrets.HEDERA_BOT_TOKEN }}
 
       - name: Import GPG Key
         id: gpg_importer
-        uses: step-security/ghaction-import-gpg@c0b4a334b9b72bfaaebec86ef022a78a5b17f828 # v7.0.0
+        uses: crazy-max/ghaction-import-gpg@v6
         with:
           git_commit_gpgsign: true
           git_committer_email: ${{ vars.GIT_USER_EMAIL }}
@@ -506,12 +483,12 @@ jobs:
           git reset --hard $RELEASE_BRANCH
 
       - name: Install pnpm
-        uses: step-security/action-setup@0ad50dc56a23060fa78b14cfcf0677c4e14b42bc # v5.0.0
+        uses: pnpm/action-setup@v4
         with:
           version: 9.15.3
 
       - name: Set up Node.js
-        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        uses: actions/setup-node@v4
         with:
           node-version: 24.15.0
 
@@ -532,7 +509,7 @@ jobs:
           pnpm install --dir automation
 
       - name: Create Pull Request
-        uses: peter-evans/create-pull-request@5f6978faf089d4d20b00c7766989d076bb2fc7f1 # v8.1.1
+        uses: peter-evans/create-pull-request@v7
         with:
           author: ${{ steps.gpg_importer.outputs.name }} <${{ steps.gpg_importer.outputs.email }}>
           body: Bump versions for v${{ env.NEXT_VERSION_SNAPSHOT }}
