@@ -336,6 +336,11 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-pnpm-store-
 
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
       - name: Install Dependencies
         # front-end postinstall (electron-builder install-app-deps) rebuilds
         # native modules for the macOS electron runtime.
