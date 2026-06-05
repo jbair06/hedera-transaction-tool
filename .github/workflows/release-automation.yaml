@@ -350,7 +350,8 @@ jobs:
       - name: Build and Sign macOS Artifacts
         working-directory: front-end
         # build:mac only builds + signs — it does not notarize (that is the
-        # explicit step below).
+        # explicit step below). --publish=never prevents electron-builder from
+        # auto-publishing in CI; artifacts are uploaded via upload-artifact.
         env:
           # Developer ID Application cert (signs the .app, .dmg and .zip).
           # CSC_LINK accepts the base64-encoded .p12 directly.
@@ -359,7 +360,7 @@ jobs:
           # Developer ID Installer cert (signs the .pkg).
           CSC_INSTALLER_LINK: ${{ secrets.MACOS_CERT_INSTALLER_BASE64 }}
           CSC_INSTALLER_KEY_PASSWORD: ${{ secrets.MACOS_CERT_INSTALLER_PASSWORD }}
-        run: pnpm run build:mac
+        run: pnpm run build && pnpm exec electron-builder --mac --publish=never
 
       - name: Prepare App Store Connect API Key
         # notarytool needs the App Store Connect API key as a .p8 file on disk;
