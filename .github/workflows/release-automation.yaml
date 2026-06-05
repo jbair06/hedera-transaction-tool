@@ -9,16 +9,12 @@ on:
         description: "Version (semver)"
         required: true
       mode:
-        description: |
-          Choose workflow behavior:
-          - full_release: branch + tag + images + GitHub release + snapshot PR
-          - images_only: only build and push Docker images
-          - build_mac_only: only build and sign mac artificats
+        description: "Pipeline scope"
         type: choice
         options:
           - full_release
-          - images_only
-          - build_mac_only
+          - publish_docker_images_only
+          - test_mac_build_only
 
 permissions:
   contents: write
@@ -133,7 +129,7 @@ jobs:
 
             # Create a PR to bump main branch to the next snapshot version
             echo "create_pr=true" >> "$GITHUB_OUTPUT"
-            echo "pr_title=Bump versions for v$NEXT_VERSION_SNAPSHOT" >> "$GITHUB_OUTPUT"
+            echo "pr_title=chore: bump versions for v$NEXT_VERSION_SNAPSHOT" >> "$GITHUB_OUTPUT"
           else
             git checkout ${RELEASE_BRANCH}
           fi
@@ -171,7 +167,7 @@ jobs:
         uses: stefanzweifel/git-auto-commit-action@v5
         with:
           commit_author: ${{ steps.gpg_importer.outputs.name }} <${{ steps.gpg_importer.outputs.email }}>
-          commit_message: Bump versions for ${{ env.RELEASE_TAG }}
+          commit_message: "Bump versions for ${{ env.RELEASE_TAG }} [skip ci]"
           commit_options: "--no-verify --signoff"
           commit_user_name: ${{ steps.gpg_importer.outputs.name }}
           commit_user_email: ${{ steps.gpg_importer.outputs.email }}
@@ -181,7 +177,7 @@ jobs:
   # Docker Auth + Buildx + Cache
   # Runs in both modes, always building from the release tag for the supplied
   # version. For a full release, cut_release creates that tag just before this
-  # job; for images_only mode the tag must already exist (rebuilding a prior release).
+  # job; for publish_docker_images_only mode the tag must already exist (rebuilding a prior release).
   # ----------------------------
   build_and_push_images:
     name: Build and Push Docker Images
@@ -190,7 +186,7 @@ jobs:
     needs: [prepare, cut_release]
     if:  >-
       ${{ always() && 
-        (inputs.mode == 'images_only' || inputs.mode == 'full_release') &&
+        (inputs.mode == 'publish_docker_images_only' || inputs.mode == 'full_release') &&
         needs.prepare.result == 'success' && 
         (needs.cut_release.result == 'success' || needs.cut_release.result == 'skipped')
       }}
@@ -226,7 +222,7 @@ jobs:
           # so the image is pinned to the exact tagged commit (the api embeds
           # package.json `version` at build time). For a full release,
           # cut_release (needed above) creates this tag just before this job;
-          # for images_only mode the tag must already exist.
+          # for publish_docker_images_only mode the tag must already exist.
           ref: ${{ needs.prepare.outputs.release_tag }}
           token: ${{ secrets.HEDERA_BOT_TOKEN }}
 
@@ -279,9 +275,9 @@ jobs:
   # accompanying blockmaps) with electron-builder on a macOS runner. Mirrors
   # build_and_push_images: it builds from the immutable release tag for the
   # supplied version (so the version electron-builder bundles matches the
-  # tagged commit), runs in both full_release and build_mac_only modes, and
+  # tagged commit), runs in both full_release and test_mac_build_only modes, and
   # only requires cut_release to have succeeded or been skipped — in
-  # build_mac_only mode cut_release is skipped and the tag must already exist.
+  # test_mac_build_only mode cut_release is skipped and the tag must already exist.
   # It does not depend on the image build, so the two run in parallel.
   # The artifacts are signed (Developer ID Application for the app/dmg/zip,
   # Developer ID Installer for the pkg), then the dmg/pkg installers are
@@ -297,7 +293,7 @@ jobs:
     needs: [prepare, cut_release]
     if:  >-
       ${{ always() &&
-        (inputs.mode == 'build_mac_only' || inputs.mode == 'full_release') &&
+        (inputs.mode == 'test_mac_build_only' || inputs.mode == 'full_release') &&
         needs.prepare.result == 'success' &&
         (needs.cut_release.result == 'success' || needs.cut_release.result == 'skipped')
       }}
@@ -406,7 +402,7 @@ jobs:
 
   # ----------------------------
   # Close the milestone and publish the GitHub release (after images are pushed).
-  # Skipped entirely when images_only mode is set.
+  # Skipped entirely when publish_docker_images_only mode is set.
   # ----------------------------
   github_release:
     name: Publish GitHub Release
@@ -553,7 +549,7 @@ jobs:
           author: ${{ steps.gpg_importer.outputs.name }} <${{ steps.gpg_importer.outputs.email }}>
           body: Bump versions for v${{ env.NEXT_VERSION_SNAPSHOT }}
           branch: create-pull-request/${{ env.RELEASE_BRANCH }}
-          commit-message: Bump versions for v${{ env.NEXT_VERSION_SNAPSHOT }}
+          commit-message: "Bump versions for v${{ env.NEXT_VERSION_SNAPSHOT }} [skip ci]"
           committer: ${{ steps.gpg_importer.outputs.name }} <${{ steps.gpg_importer.outputs.email }}>
           delete-branch: true
           signoff: true
