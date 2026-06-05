@@ -452,6 +452,12 @@ jobs:
           echo "$RELEASE_BODY" >> $GITHUB_ENV
           echo "EOF" >> $GITHUB_ENV
 
+      - name: Download macOS Artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: macos-artifacts-${{ needs.prepare.outputs.version }}
+          path: macos-artifacts
+
       - name: Create GitHub Release
         uses: ncipollo/release-action@v1
         with:
@@ -463,6 +469,13 @@ jobs:
           skipIfReleaseExists: true
           tag: ${{ env.RELEASE_TAG }}
           token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload macOS Artifacts to Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release upload ${{ env.RELEASE_TAG }} macos-artifacts/* \
+            --repo ${{ github.repository }} --clobber
 
   create_snapshot_pr:
     name: Create Snapshot Bump PR
