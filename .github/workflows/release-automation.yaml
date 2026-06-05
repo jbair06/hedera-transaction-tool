@@ -337,9 +337,9 @@ jobs:
             ${{ runner.os }}-pnpm-store-
 
       - name: Install Dependencies
-        # Root install runs front-end's postinstall (electron-builder
-        # install-app-deps), rebuilding the native modules for the macOS
-        # electron runtime.
+        # front-end postinstall (electron-builder install-app-deps) rebuilds
+        # native modules for the macOS electron runtime.
+        working-directory: front-end
         run: pnpm install --frozen-lockfile
 
       - name: Build and Sign macOS Artifacts
