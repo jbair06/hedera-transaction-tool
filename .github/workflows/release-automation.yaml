@@ -501,14 +501,21 @@ jobs:
                 | sed \
                   -e "s|<major\.minor\.patch>|${VERSION}|g")
             fi
-            ISSUE_URL=$(gh issue create \
-              --title "$ISSUE_TITLE" \
-              --body "$ISSUE_BODY" \
-              --label "release" \
-              "${MILESTONE_ARGS[@]}" \
-              --type "Task" \
-              --repo ${{ github.repository }})
-
+            if ! ISSUE_URL=$(gh issue create \                                                                                                                                                                                                                                                                                                                                            
+                --title "$ISSUE_TITLE" \
+                --body "$ISSUE_BODY" \
+                --label "release" \
+                "${MILESTONE_ARGS[@]}" \
+                --type "Task" \
+                --repo ${{ github.repository }} 2>/dev/null); then
+              ISSUE_URL=$(gh issue create \
+                --title "$ISSUE_TITLE" \
+                --body "$ISSUE_BODY" \
+                --label "release" \
+                "${MILESTONE_ARGS[@]}" \
+                --repo ${{ github.repository }})
+            fi
+      
             ISSUE_NUMBER="${ISSUE_URL##*/}"
             gh issue comment "$ISSUE_NUMBER" \
               --body "$(cat docs/release-testing-checklist.md)" \
