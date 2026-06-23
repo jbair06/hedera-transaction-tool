@@ -22,6 +22,8 @@ import {
   FileUpdateTransaction,
   Hbar,
   KeyList,
+  NodeCreateTransaction,
+  RegisteredNodeCreateTransaction,
   Timestamp,
   Transaction,
   TransactionId,
@@ -57,7 +59,7 @@ import { addDraft, updateDraft } from '@renderer/services/transactionDraftsServi
 /* Props */
 const { createTransaction, preCreateAssert, customRequest } = defineProps<{
   createTransaction: CreateTransactionFunc;
-  preCreateAssert?: () => boolean | void;
+  preCreateAssert?: () => boolean | void | Promise<boolean | void>;
   createDisabled?: boolean;
   customRequest?: CustomRequest;
 }>();
@@ -166,6 +168,13 @@ const hasDescriptionChanged = computed(() => {
 
 const hasDataChanged = computed(() => hasTransactionChanged.value || hasDescriptionChanged.value);
 
+const isNodeCreationPrivRequired = computed(() => {
+  return (
+    initialTransaction.value instanceof NodeCreateTransaction ||
+    initialTransaction.value instanceof RegisteredNodeCreateTransaction
+  );
+});
+
 /* Handlers */
 const handleDraftLoaded = async (transaction: Transaction) => {
   initialTransaction.value = transaction;
@@ -179,7 +188,7 @@ const handleDraftLoaded = async (transaction: Transaction) => {
 
 const handleCreate = async () => {
   basePreCreateAssert();
-  if (preCreateAssert?.() === false) return;
+  if ((await Promise.resolve(preCreateAssert?.())) === false) return;
 
   const capturedData = { ...data } as TransactionCommonData;
   // Build the initial transaction once so the retry path can anchor on the
@@ -198,9 +207,7 @@ const handleCreate = async () => {
           if (nanoOffset === 0) return initialTx.toBytes();
           const offsetTimestamp = applyNanoOffset(baseValidStart, nanoOffset);
           const retryTx = createTransaction(capturedData);
-          retryTx.setTransactionId(
-            TransactionId.withValidStart(payerAccountId, offsetTimestamp),
-          );
+          retryTx.setTransactionId(TransactionId.withValidStart(payerAccountId, offsetTimestamp));
           return retryTx.toBytes();
         }
       : undefined;
@@ -420,6 +427,7 @@ defineExpose({
           @update:payer-id="handlePayerIdUpdate"
           v-model:valid-start="data.validStart"
           v-model:max-transaction-fee="data.maxTransactionFee as Hbar"
+          :is-node-creation-priv-required="isNodeCreationPrivRequired"
         />
 
         <div class="row mt-6">

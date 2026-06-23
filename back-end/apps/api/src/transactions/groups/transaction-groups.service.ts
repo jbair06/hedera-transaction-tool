@@ -1,6 +1,7 @@
 import {
   BadRequestException,
   Injectable,
+  Logger,
   UnauthorizedException,
 } from '@nestjs/common';
 import { InjectDataSource } from '@nestjs/typeorm';
@@ -13,6 +14,7 @@ import {
   getTransactionGroupItemsQuery,
   NatsPublisherService,
   SqlBuilderService,
+  TransactionSnapshotService,
 } from '@app/common';
 import { Transaction, TransactionGroup, TransactionGroupItem, TransactionStatus, User, UserKey } from '@entities';
 
@@ -26,16 +28,15 @@ import {
 
 @Injectable()
 export class TransactionGroupsService {
+  private readonly logger = new Logger(TransactionGroupsService.name);
+
   constructor(
     private readonly transactionsService: TransactionsService,
     @InjectDataSource() private dataSource: DataSource,
     private readonly notificationsPublisher: NatsPublisherService,
     private readonly sqlBuilder: SqlBuilderService,
+    private readonly transactionSnapshotService: TransactionSnapshotService,
   ) {}
-
-  getTransactionGroups(): Promise<TransactionGroup[]> {
-    return this.dataSource.manager.find(TransactionGroup);
-  }
 
   async createTransactionGroup(
     user: User,
@@ -52,27 +53,32 @@ export class TransactionGroupsService {
       user,
     );
 
-    await this.dataSource.transaction(async manager => {
-      // Create group items with corresponding transactions
-      const groupItems = transactions.map((transaction, index) => {
-        const groupItemDto = dto.groupItems[index];
-        const groupItem = manager.create(TransactionGroupItem, groupItemDto);
-        groupItem.transaction = transaction;
-        groupItem.group = group;
-        return groupItem;
+    try {
+      await this.dataSource.transaction(async manager => {
+        // Create group items with corresponding transactions
+        const groupItems = transactions.map((transaction, index) => {
+          const groupItemDto = dto.groupItems[index];
+          const groupItem = manager.create(TransactionGroupItem, groupItemDto);
+          groupItem.transaction = transaction;
+          groupItem.group = group;
+          return groupItem;
+        });
+
+        // Save everything
+        await manager.save(TransactionGroup, group);
+        await manager.save(TransactionGroupItem, groupItems);
+
+        emitTransactionStatusUpdate(
+          this.notificationsPublisher,
+          transactions.map(tx => ({
+            entityId: tx.id,
+          })),
+        );
       });
-
-      // Save everything
-      await manager.save(TransactionGroup, group);
-      await manager.save(TransactionGroupItem, groupItems);
-
-      emitTransactionStatusUpdate(
-        this.notificationsPublisher,
-        transactions.map(tx => ({
-          entityId: tx.id,
-        })),
-      );
-    });
+    } catch (error) {
+      this.logger.error('Failed to save transaction group', (error as any)?.stack ?? (error as any)?.message ?? String(error));
+      throw new BadRequestException(ErrorCodes.FSTG);
+    }
 
     return group;
   }
@@ -240,10 +246,11 @@ export class TransactionGroupsService {
 
     // Bulk UPDATE in a single query
     if (cancelableIds.length > 0) {
+      const executedAt = new Date();
       const updateResult = await this.dataSource.getRepository(Transaction)
         .createQueryBuilder()
         .update(Transaction)
-        .set({ status: TransactionStatus.CANCELED })
+        .set({ status: TransactionStatus.CANCELED, executedAt })
         .where('id IN (:...ids)', { ids: cancelableIds })
         .andWhere('status IN (:...statuses)', { statuses: cancelableStatuses })
         .execute();
@@ -286,6 +293,9 @@ export class TransactionGroupsService {
         emitTransactionStatusUpdate(
           this.notificationsPublisher,
           canceled.map(id => ({ entityId: id })),
+        );
+        await Promise.all(
+          canceled.map(id => this.transactionSnapshotService.captureForTransaction(id, executedAt)),
         );
       }
     }
