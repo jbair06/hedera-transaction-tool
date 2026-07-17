@@ -294,8 +294,7 @@ jobs:
           xcrun notarytool history \
             --key "${APPLE_API_KEY}" \
             --key-id "${APPLE_API_KEY_ID}" \
-            --issuer "${APPLE_API_ISSUER}" \
-            --page-size 1
+            --issuer "${APPLE_API_ISSUER}"
 
       - name: Install pnpm
         uses: pnpm/action-setup@v4
