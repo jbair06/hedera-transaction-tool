@@ -1372,7 +1372,7 @@ describe('TransactionsService', () => {
       /* New signer row inserted so the key owner is recognised as a participant. */
       expect(insertQb.into).toHaveBeenCalledWith(TransactionSigner);
       expect(insertQb.values).toHaveBeenCalledWith([
-        { userId: 7, transactionId, userKeyId: 42 },
+        { userId: 7, transactionId, userKeyId: 42, recorderId: userWithKeys.id, tool: 'api', version: null },
       ]);
       expect(insertQb.execute).toHaveBeenCalled();
 
@@ -1502,8 +1502,8 @@ describe('TransactionsService', () => {
       );
 
       expect(insertQb.values).toHaveBeenCalledWith([
-        { userId: 7, transactionId, userKeyId: 42 },
-        { userId: 9, transactionId, userKeyId: 43 },
+        { userId: 7, transactionId, userKeyId: 42, recorderId: userWithKeys.id, tool: 'api', version: null },
+        { userId: 9, transactionId, userKeyId: 43, recorderId: userWithKeys.id, tool: 'api', version: null },
       ]);
     });
 
@@ -1543,8 +1543,8 @@ describe('TransactionsService', () => {
 
       expect(insertQb.values).toHaveBeenCalledWith(
         expect.arrayContaining([
-          { userId: 7, transactionId, userKeyId: 42 },
-          { userId: 9, transactionId, userKeyId: 43 },
+          { userId: 7, transactionId, userKeyId: 42, recorderId: userWithKeys.id, tool: 'api', version: null },
+          { userId: 9, transactionId, userKeyId: 43, recorderId: userWithKeys.id, tool: 'api', version: null },
         ]),
       );
     });
@@ -2020,6 +2020,134 @@ describe('TransactionsService', () => {
         id: transactionId,
         error: 'An unexpected error occurred while importing the signatures',
       });
+    });
+
+    it('should set recorderId to the caller (importer) not the key owner', async () => {
+      const transaction = {
+        id: transactionId,
+        transactionId: sdkTransaction.transactionId.toString(),
+        status: TransactionStatus.WAITING_FOR_SIGNATURES,
+        transactionBytes: sdkTransaction.toBytes(),
+        mirrorNetwork: 'testnet',
+      };
+      const matchingUserKey = { id: 42, userId: 99, publicKey: privateKey.publicKey.toStringRaw() };
+      await sdkTransaction.sign(privateKey);
+
+      entityManager.find.mockImplementation(makeFindDispatcher([transaction], [matchingUserKey]) as any);
+      const updateQb = makeUpdateQb();
+      const insertQb = makeInsertQb();
+      const manager = makeTxManager();
+      manager.createQueryBuilder.mockReturnValueOnce(updateQb).mockReturnValueOnce(insertQb);
+      stubTransaction(manager);
+      mockValidatedKeys([privateKey.publicKey]);
+      jest.mocked(userKeysRequiredToSign).mockResolvedValue([1]);
+      jest.mocked(processTransactionStatus).mockResolvedValue(new Map());
+
+      await service.importSignatures(
+        [{ id: transactionId, signatureMap: sdkTransaction.getSignatures() }],
+        userWithKeys,
+      );
+
+      expect(insertQb.values).toHaveBeenCalledWith([
+        expect.objectContaining({
+          userId: 99,
+          recorderId: userWithKeys.id,
+        }),
+      ]);
+    });
+
+    it('should propagate tool from the DTO item to the signer row', async () => {
+      const transaction = {
+        id: transactionId,
+        transactionId: sdkTransaction.transactionId.toString(),
+        status: TransactionStatus.WAITING_FOR_SIGNATURES,
+        transactionBytes: sdkTransaction.toBytes(),
+        mirrorNetwork: 'testnet',
+      };
+      const matchingUserKey = { id: 42, userId: 7, publicKey: privateKey.publicKey.toStringRaw() };
+      await sdkTransaction.sign(privateKey);
+
+      entityManager.find.mockImplementation(makeFindDispatcher([transaction], [matchingUserKey]) as any);
+      const updateQb = makeUpdateQb();
+      const insertQb = makeInsertQb();
+      const manager = makeTxManager();
+      manager.createQueryBuilder.mockReturnValueOnce(updateQb).mockReturnValueOnce(insertQb);
+      stubTransaction(manager);
+      mockValidatedKeys([privateKey.publicKey]);
+      jest.mocked(userKeysRequiredToSign).mockResolvedValue([1]);
+      jest.mocked(processTransactionStatus).mockResolvedValue(new Map());
+
+      await service.importSignatures(
+        [{ id: transactionId, signatureMap: sdkTransaction.getSignatures(), tool: 'v1' }],
+        userWithKeys,
+      );
+
+      expect(insertQb.values).toHaveBeenCalledWith([
+        expect.objectContaining({ tool: 'v1' }),
+      ]);
+    });
+
+    it('should default tool to api when not present on the DTO item', async () => {
+      const transaction = {
+        id: transactionId,
+        transactionId: sdkTransaction.transactionId.toString(),
+        status: TransactionStatus.WAITING_FOR_SIGNATURES,
+        transactionBytes: sdkTransaction.toBytes(),
+        mirrorNetwork: 'testnet',
+      };
+      const matchingUserKey = { id: 42, userId: 7, publicKey: privateKey.publicKey.toStringRaw() };
+      await sdkTransaction.sign(privateKey);
+
+      entityManager.find.mockImplementation(makeFindDispatcher([transaction], [matchingUserKey]) as any);
+      const updateQb = makeUpdateQb();
+      const insertQb = makeInsertQb();
+      const manager = makeTxManager();
+      manager.createQueryBuilder.mockReturnValueOnce(updateQb).mockReturnValueOnce(insertQb);
+      stubTransaction(manager);
+      mockValidatedKeys([privateKey.publicKey]);
+      jest.mocked(userKeysRequiredToSign).mockResolvedValue([1]);
+      jest.mocked(processTransactionStatus).mockResolvedValue(new Map());
+
+      await service.importSignatures(
+        [{ id: transactionId, signatureMap: sdkTransaction.getSignatures() }],
+        userWithKeys,
+      );
+
+      expect(insertQb.values).toHaveBeenCalledWith([
+        expect.objectContaining({ tool: 'api' }),
+      ]);
+    });
+
+    it('should propagate version parameter to signer rows', async () => {
+      const transaction = {
+        id: transactionId,
+        transactionId: sdkTransaction.transactionId.toString(),
+        status: TransactionStatus.WAITING_FOR_SIGNATURES,
+        transactionBytes: sdkTransaction.toBytes(),
+        mirrorNetwork: 'testnet',
+      };
+      const matchingUserKey = { id: 42, userId: 7, publicKey: privateKey.publicKey.toStringRaw() };
+      await sdkTransaction.sign(privateKey);
+
+      entityManager.find.mockImplementation(makeFindDispatcher([transaction], [matchingUserKey]) as any);
+      const updateQb = makeUpdateQb();
+      const insertQb = makeInsertQb();
+      const manager = makeTxManager();
+      manager.createQueryBuilder.mockReturnValueOnce(updateQb).mockReturnValueOnce(insertQb);
+      stubTransaction(manager);
+      mockValidatedKeys([privateKey.publicKey]);
+      jest.mocked(userKeysRequiredToSign).mockResolvedValue([1]);
+      jest.mocked(processTransactionStatus).mockResolvedValue(new Map());
+
+      await service.importSignatures(
+        [{ id: transactionId, signatureMap: sdkTransaction.getSignatures() }],
+        userWithKeys,
+        '0.35.0',
+      );
+
+      expect(insertQb.values).toHaveBeenCalledWith([
+        expect.objectContaining({ version: '0.35.0' }),
+      ]);
     });
   });
 
@@ -2612,7 +2740,6 @@ describe('TransactionsService', () => {
     it('should throw if transaction is not found', async () => {
       transactionsRepo.find.mockResolvedValue([]);
 
-      (userKeysRequiredToSign as jest.Mock).mockResolvedValueOnce([]);
       await expect(service.getTransactionWithVerifiedAccess(123, user as User)).rejects.toThrow(
         ErrorCodes.TNF,
       );
@@ -2737,28 +2864,34 @@ describe('TransactionsService', () => {
       );
     });
 
-    it('should return history transaction, even if the user does not have verified access', async () => {
+    it('should return EXECUTED transaction without checking user association', async () => {
       const transaction = {
         id: 123,
-        creatorKey: {
-          id: 1,
-          userId: 1,
-          user: {
-            id: 1,
-            email: 'test@email.com',
-          },
-        },
+        creatorKey: { id: 1, userId: 99, user: { id: 99, email: 'other@email.com' } },
         status: TransactionStatus.EXECUTED,
       };
 
-      (userKeysRequiredToSign as jest.Mock).mockResolvedValueOnce([]);
       jest.spyOn(approversService, 'getApproversByTransactionId').mockResolvedValueOnce([]);
       jest.spyOn(approversService, 'getTreeStructure').mockReturnValue([]);
       transactionsRepo.find.mockResolvedValue([transaction as Transaction]);
 
-      await expect(service.getTransactionWithVerifiedAccess(123, user as User)).resolves.toEqual(
-        transaction,
-      );
+      await expect(service.getTransactionWithVerifiedAccess(123, user as User)).resolves.toEqual(transaction);
+      expect(userKeysRequiredToSign).not.toHaveBeenCalled();
+    });
+
+    it('should return FAILED transaction without checking user association', async () => {
+      const transaction = {
+        id: 456,
+        creatorKey: { id: 1, userId: 99, user: { id: 99, email: 'other@email.com' } },
+        status: TransactionStatus.FAILED,
+      };
+
+      jest.spyOn(approversService, 'getApproversByTransactionId').mockResolvedValueOnce([]);
+      jest.spyOn(approversService, 'getTreeStructure').mockReturnValue([]);
+      transactionsRepo.find.mockResolvedValue([transaction as Transaction]);
+
+      await expect(service.getTransactionWithVerifiedAccess(456, user as User)).resolves.toEqual(transaction);
+      expect(userKeysRequiredToSign).not.toHaveBeenCalled();
     });
   });
 

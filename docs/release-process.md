@@ -1,18 +1,9 @@
-## Overview
-
-To start a release, trigger the **Release Automation** workflow (`Actions → Release Automation → Run workflow`) with the target version. The workflow creates a pre-filled tracking issue — use that issue to work through the manual steps.
-
-**Pre-release** (version: `<major.minor.patch>-beta.<number>`): creates the `release/<major.minor>` branch (if it doesn't exist), bumps versions, tags, builds and pushes Docker images, builds and notarizes macOS artifacts, and publishes the GitHub pre-release with all artifacts attached. On the first pre-release of a new minor version it also opens a SNAPSHOT bump PR to `main`.
-
-**Final release** (version: `<major.minor.patch>`): bumps versions on the release branch, generates the NOTICE file, tags, builds and pushes Docker images, builds and notarizes macOS artifacts, and creates the GitHub release draft with all artifacts attached.
-
----
-
 # Release workflow
 
 ## Pre-Release
 
-<!-- snapshot-bump-pr-line -->
+- [ ] Set type, labels, and project board on this tracking issue
+- [ ] Review and merge the [`v<major.minor.patch>-SNAPSHOT` bump PR](<snapshot-pr-url>) to `main`
 
 ### Pre-release deployment
 - [ ] Create a new branch on DevOps-GitOps:
@@ -29,10 +20,10 @@ To start a release, trigger the **Release Automation** workflow (`Actions → Re
 ### Pre-requisites
 - [ ] Beta `v<major.minor.patch>-beta.<number>` deployed and stable
 - [ ] Run performance tests against `staging`
-- [ ] Manual testing issue created from `docs/test-scenarios.md`
 - [ ] Manual testing completed and beta approved
 
 ### Publish Release
+- [ ] Trigger the Release Automation workflow with version `<major.minor.patch>`
 - [ ] Add a short description to the GitHub release draft for `v<major.minor.patch>`
 - [ ] Publish the GitHub release draft
 

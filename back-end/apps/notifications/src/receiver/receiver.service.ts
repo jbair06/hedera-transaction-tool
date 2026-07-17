@@ -1,4 +1,5 @@
 import { Injectable } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { InjectEntityManager } from '@nestjs/typeorm';
 import { EntityManager, In } from 'typeorm';
 
@@ -49,16 +50,30 @@ export class ReceiverService {
     [TransactionStatus.WAITING_FOR_SIGNATURES]: NotificationType.TRANSACTION_WAITING_FOR_SIGNATURES,
     [TransactionStatus.WAITING_FOR_EXECUTION]: NotificationType.TRANSACTION_READY_FOR_EXECUTION,
     [TransactionStatus.EXECUTED]: NotificationType.TRANSACTION_EXECUTED,
-    // [TransactionStatus.FAILED]: NotificationType.TRANSACTION_EXECUTED,
-    // [TransactionStatus.REJECTED]: NotificationType.TRANSACTION_EXECUTED,
+    [TransactionStatus.FAILED]: NotificationType.TRANSACTION_FAILED,
+    [TransactionStatus.REJECTED]: NotificationType.TRANSACTION_REJECTED,
     [TransactionStatus.EXPIRED]: NotificationType.TRANSACTION_EXPIRED,
     [TransactionStatus.CANCELED]: NotificationType.TRANSACTION_CANCELLED,
   };
+
+  // Three lifecycle tiers used to determine when a group email should fire.
+  // Tier 1 = signing, Tier 2 = executing, Tier 3 = terminal (all else).
+  // A group email fires once all non-CANCELLED members share the same tier.
+  private static readonly EMAIL_TYPE_TIER: Partial<Record<NotificationType, number>> = {
+    [NotificationType.TRANSACTION_WAITING_FOR_SIGNATURES]: 1,
+    [NotificationType.TRANSACTION_READY_FOR_EXECUTION]: 2,
+  };
+
+  private getEmailTier(emailType: NotificationType | null): number {
+    if (!emailType) return 3;
+    return ReceiverService.EMAIL_TYPE_TIER[emailType] ?? 3;
+  }
 
   constructor(
     @InjectEntityManager() private entityManager: EntityManager,
     private readonly transactionSignatureService: TransactionSignatureService,
     private readonly notificationsPublisher: NatsPublisherService,
+    private readonly configService: ConfigService,
   ) {}
 
   // --- Small lookups -----------------------------------------------------
@@ -271,6 +286,7 @@ export class ReceiverService {
     notificationType: NotificationType,
     userIds: Set<number>,
     cache: Map<number, User>, // User with preferences relation
+    channel: 'email' | 'inApp' | 'any' = 'any',
   ): Promise<number[]> {
     // Load uncached users
     await this.loadUsersWithPreferences(entityManager, Array.from(userIds), cache);
@@ -285,12 +301,16 @@ export class ReceiverService {
         p => p.type === notificationType
       );
 
-      const channel = NOTIFICATION_CHANNELS[notificationType];
-      const emailAllowed = !channel.email || !preference || preference.email !== false;
-      const inAppAllowed = !channel.inApp || !preference || preference.inApp !== false;
-      if (emailAllowed && inAppAllowed) {
-        result.push(id);
-      }
+      const ch = NOTIFICATION_CHANNELS[notificationType];
+      const emailAllowed = !ch.email || !preference || preference.email !== false;
+      const inAppAllowed = !ch.inApp || !preference || preference.inApp !== false;
+
+      const passes =
+        channel === 'email' ? emailAllowed :
+        channel === 'inApp' ? inAppAllowed :
+        emailAllowed && inAppAllowed;
+
+      if (passes) result.push(id);
     }
 
     return result;
@@ -407,11 +427,9 @@ export class ReceiverService {
       });
     }
 
-    if (indicatorNotifications.length > 0) {
-      await entityManager.delete(Notification, {
-        id: In(indicatorNotifications.map(n => n.id)),
-      });
-    }
+    await entityManager.delete(Notification, {
+      id: In(indicatorNotifications.map(n => n.id)),
+    });
 
     return deletedReceiverIds;
   }
@@ -440,6 +458,13 @@ export class ReceiverService {
       },
       relations: { notificationReceivers: true },
     });
+
+    if (!notification) {
+      console.warn(
+        `Notification row not found for entityId=${transactionId}, type=${notificationType}; skipping receiver updates/creates`,
+      );
+      return { newReceivers: [], updatedReceivers: [] };
+    }
 
     // Get users who should receive this notification (filtered by preferences)
     const receiverIds = await this.filterReceiversByPreferenceForType(
@@ -853,8 +878,9 @@ export class ReceiverService {
       );
     }
 
+    const emailsDisabled = this.configService.get<boolean>('DISABLE_NOTIFICATION_EMAILS');
     if (isManual) {
-      const emailType = this.getEmailNotificationType(transaction.status);
+      const emailType = emailsDisabled ? null : this.getEmailNotificationType(transaction.status);
       if (emailType) {
         const { newReceivers, updatedReceivers } = await this.processNotificationType(
           entityManager,
@@ -872,7 +898,7 @@ export class ReceiverService {
           cache,
         );
       }
-    } else {
+    } else if (!emailsDisabled) {
       const newReceivers = await this.processReminderEmail(
         entityManager,
         transaction,
@@ -907,15 +933,19 @@ export class ReceiverService {
       NotificationType.USER_REGISTERED,
       adminUserIds,
       cache,
+      'inApp',
     );
 
     // Get admin users who want email notifications (filtered by preferences)
-    const emailReceiverUserIds = await this.filterReceiversByPreferenceForType(
-      entityManager,
-      NotificationType.USER_REGISTERED,
-      adminUserIds,
-      cache,
-    );
+    const emailReceiverUserIds = this.configService.get<boolean>('DISABLE_NOTIFICATION_EMAILS')
+      ? []
+      : await this.filterReceiversByPreferenceForType(
+          entityManager,
+          NotificationType.USER_REGISTERED,
+          adminUserIds,
+          cache,
+          'email',
+        );
 
     // Combine all receivers (union of in-app and email preferences)
     const allReceiverIds = new Set([...inAppReceiverUserIds, ...emailReceiverUserIds]);
@@ -1012,6 +1042,80 @@ export class ReceiverService {
     };
   }
 
+  // --- Group notification helpers --------------------------------------
+
+  /**
+   * Returns true if this transaction should trigger the group-level email for
+   * the given emailType. Fires when no non-CANCELLED peer is still at an
+   * earlier email tier — i.e., every other group member has already reached
+   * this lifecycle stage or moved past it. CANCELLED peers are always skipped;
+   * they fire individual emails regardless.
+   */
+  private isLastInGroupToReachStage(
+    transaction: Transaction,
+    emailType: NotificationType | null,
+    allGroupTransactions: Transaction[],
+  ): boolean {
+    const tier = this.getEmailTier(emailType);
+
+    for (const other of allGroupTransactions) {
+      if (other.id === transaction.id) continue;
+      const otherEmailType = this.getEmailNotificationType(other.status);
+      if (otherEmailType === NotificationType.TRANSACTION_CANCELLED) continue;
+      if (this.getEmailTier(otherEmailType) < tier) return false;
+    }
+
+    return true;
+  }
+
+  /**
+   * Called when the last-ordered transaction in a group fires a status-update
+   * email. Creates email notification receivers for every non-CANCELLED member
+   * of the group that has a mapped email type. The debounce batcher groups
+   * them per email type so each recipient receives one message per type.
+   */
+  private async handleGroupEmailForLastTransaction(
+    entityManager: EntityManager,
+    cache: Map<number, User>,
+    keyCache: Map<string, UserKey>,
+    emailNotifications: { [email: string]: Notification[] },
+    emailReceiverIds: number[],
+    groupTransactions: Transaction[],
+  ): Promise<void> {
+    if (groupTransactions.length === 0) return;
+    if (this.configService.get<boolean>('DISABLE_NOTIFICATION_EMAILS')) return;
+
+    const approversMap = await this.getApproversByTransactionIds(
+      entityManager,
+      groupTransactions.map(t => t.id),
+    );
+
+    for (const tx of groupTransactions) {
+      const emailType = this.getEmailNotificationType(tx.status);
+      if (!emailType || emailType === NotificationType.TRANSACTION_CANCELLED) continue;
+      if (!NOTIFICATION_CHANNELS[emailType].email) continue;
+
+      try {
+        const approvers = approversMap.get(tx.id) ?? [];
+        const additionalData = this.buildAdditionalData(tx);
+
+        const newReceivers = await this.createNotificationWithReceivers(
+          entityManager,
+          tx,
+          approvers,
+          emailType,
+          additionalData,
+          cache,
+          keyCache,
+        );
+
+        this.collectEmailNotifications(newReceivers, [], emailNotifications, emailReceiverIds, cache);
+      } catch (error) {
+        console.error(`Error processing group email notification for transaction ${tx.id}:`, error);
+      }
+    }
+  }
+
   // --- Public processors (entry points) --------------------------------
 
   async processTransactionStatusUpdateNotifications(events: NotificationEventDto[]) {
@@ -1031,6 +1135,34 @@ export class ReceiverService {
       affectedUsers,
     } = ctx;
 
+    // Pre-fetch all group transactions for every group present in this batch in
+    // a single query, then group them in memory.  This avoids N sequential round
+    // trips when the batch contains transactions from multiple groups.
+    const groupTransactionCache = new Map<number, Transaction[]>();
+    const uniqueGroupIds = [...new Set(
+      [...transactionMap.values()]
+        .map(tx => tx.groupItem?.groupId)
+        .filter((id): id is number => id != null),
+    )];
+
+    if (uniqueGroupIds.length > 0) {
+      const allGroupTxs = await this.entityManager.find(Transaction, {
+        where: { groupItem: { groupId: In(uniqueGroupIds) } },
+        relations: { creatorKey: true, observers: true, signers: true, groupItem: true },
+      });
+      for (const tx of allGroupTxs) {
+        const gId = tx.groupItem?.groupId;
+        if (gId == null) continue;
+        if (!groupTransactionCache.has(gId)) groupTransactionCache.set(gId, []);
+        groupTransactionCache.get(gId)!.push(tx);
+      }
+    }
+
+    // Groups that need a group email after the loop. The tiebreaker in
+    // isLastInGroupToReachStage guarantees at most one add per group per batch.
+    const groupsNeedingEmail = new Set<number>();
+    const emailsDisabled = this.configService.get<boolean>('DISABLE_NOTIFICATION_EMAILS');
+
     // Process each event
     for (const { entityId: transactionId } of events) {
       const transaction = transactionMap.get(transactionId);
@@ -1047,17 +1179,36 @@ export class ReceiverService {
         transaction.status = TransactionStatus.CANCELED;
       }
 
-      const syncType = this.getInAppNotificationType(transaction.status);
-      const emailType = this.getEmailNotificationType(transaction.status);
+      const groupId = transaction.groupItem?.groupId;
+      const emailType = emailsDisabled ? null : this.getEmailNotificationType(transaction.status);
 
-      // Single transaction for both notification types
+      // CANCELLED always fires an individual email even inside a group.
+      // Null (unmapped) emailTypes are excluded from group email logic entirely.
+      // All other non-CANCELLED group members suppress their individual email and
+      // let the group email fire once every member of the same tier is settled.
+      let txEmailType: NotificationType | null;
+      if (emailType === null) {
+        txEmailType = null;
+      } else if (groupId && emailType !== NotificationType.TRANSACTION_CANCELLED) {
+        const groupTxs = groupTransactionCache.get(groupId) ?? [];
+        const isLast = this.isLastInGroupToReachStage(transaction, emailType, groupTxs);
+        if (isLast) groupsNeedingEmail.add(groupId);
+        txEmailType = null;
+      } else {
+        // Gate by channel config: email-disabled types (e.g. TRANSACTION_FAILED/REJECTED)
+        // must not reach the mailer — they have no template yet.
+        txEmailType = NOTIFICATION_CHANNELS[emailType].email ? emailType : null;
+      }
+
+      const syncType = this.getInAppNotificationType(transaction.status);
+
       await this.entityManager.transaction(async entityManager => {
         await this.handleTransactionStatusUpdateNotifications(
           entityManager,
           transaction,
           approvers,
           syncType,
-          emailType,
+          txEmailType,
           cache,
           keyCache,
           deletionNotifications,
@@ -1067,6 +1218,22 @@ export class ReceiverService {
           emailReceiverIds,
           affectedUsers,
           transactionId,
+        );
+      });
+    }
+
+    // For each settled group, emit one group email covering all non-CANCELLED members.
+    for (const groupId of groupsNeedingEmail) {
+      const groupTxs = groupTransactionCache.get(groupId) ?? [];
+
+      await this.entityManager.transaction(async entityManager => {
+        await this.handleGroupEmailForLastTransaction(
+          entityManager,
+          cache,
+          keyCache,
+          emailNotifications,
+          emailReceiverIds,
+          groupTxs,
         );
       });
     }
